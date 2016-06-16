@@ -48,7 +48,15 @@ import scala.virtualization.lms.common.FunctionsRecursiveExp
 
 import scala.virtualization.lms.common.IfThenElse
 
+import scala.virtualization.lms.common.Record
+import optiml.compiler._
+import optiml.library._
+import optiml.shared._
+
 trait Eval extends OptiMLApplicationCompiler with StaticData with FunctionsRecursiveExp {
+
+  type hclust = Record { val A: DenseVector[Int]; val b: DenseVector[Int] }
+
   type Env = mutable.Map[RSymbol, Rep[Any]]
   var env: Env = mutable.Map.empty
 
@@ -220,13 +228,25 @@ trait Eval extends OptiMLApplicationCompiler with StaticData with FunctionsRecur
     splitTable = mutableSplitTable.Clone
     costMatrix
     //TODO: Fix this
-    /*  def multMatr: Rep[(Int, Int) => DenseMatrix[Int]] = fun { (i: Rep[Int], j: Rep[Int]) =>
-      val k: Rep[Int] = splitTable(i, j)
-      if (i == j) matrices(i)
-      else multMatr(i, k) * multMatr(k + 1, j)
-    }
-    multMatr(0, l - 1)
-  */
+    // def multMatr: Rep[(Int, Int) => DenseMatrix[Int]] = fun { (i: Rep[Int], j: Rep[Int]) =>
+    //   val k: Rep[Int] = splitTable(i, j)
+    //   if (i == j) matrices(i)
+    //   else multMatr(i, k) * multMatr(k + 1, j)
+    // }
+
+    // def multMatrIterative(i: Rep[Int], j: Rep[Int]): Rep[DenseMatrix[Int]] = {
+    //   val pair = (i, j)
+    //   val graph = Graph()
+    //   val v1 = Vertex(graph, pair)
+    //   val res: DenseMatrix[Double]
+    //   while (s.length != 0) {
+
+    //   }
+    //   res
+    // }
+
+    //   multMatrIterative(0, l - 1)
+    costMatrix
   }
 
   def eval(e: ASTNode, frame: Frame): Rep[Any] = {
@@ -768,6 +788,440 @@ trait Eval extends OptiMLApplicationCompiler with StaticData with FunctionsRecur
             }
             centers
 
+          //reading a data table from file
+          case "read.table" =>
+            val args = e.getArgs
+            val fileName = eval(args.getNode(0), frame).as[String]
+            val header = eval(args.getNode(1), frame).as[String]
+            val separator = eval(args.getNode(2), frame).as[String]
+            val rowNames = eval(args.getNode(3), frame).as[String]
+
+            val matrix = readMatrix[Double](fileName, s => { if (s.contains(".")) { s.toDouble } else { 0.0 } }, separator)
+            val mutableM: Rep[DenseMatrix[Double]] = matrix.mutable
+            mutableM.removeRow(0)
+            mutableM.Clone
+
+          //performing hierarchical clustering
+          case "hclust" =>
+            val args = e.getArgs
+            val distMatrix: Rep[DenseMatrix[Double]] = eval(args.getNode(0), frame).as[DenseMatrix[Double]]
+            val method: Rep[String] = eval(args.getNode(1), frame).as[String]
+
+            val N: Rep[Int] = distMatrix.numRows
+
+            val membr: Rep[DenseVector[Double]] = DenseVector[Double](N, true)
+
+            membr = membr.mutable
+
+            val one: Rep[Double] = 1
+            for (i <- (0 until N): Rep[Range])
+              membr.update(i, one)
+
+            if (args.size == 3) {
+              val tempMembr = eval(args.getNode(2), frame).as[DenseVector[Double]]
+              for (i <- (0 until N): Rep[Range])
+                membr.update(i, tempMembr(i))
+            }
+
+            distMatrix = distMatrix.mutable
+
+            val flags: Rep[DenseVector[Boolean]] = DenseVector[Boolean](N, true)
+            flags = flags.mutable
+
+            for (i <- (0 until N): Rep[Range])
+              flags.update(i, true)
+
+            val nnIndices: Rep[DenseVector[Int]] = DenseVector[Int](N, true)
+            val nnDist: Rep[DenseVector[Double]] = DenseVector[Double](N, true)
+
+            val historyA: Rep[DenseVector[Int]] = DenseVector[Int](N, true)
+            val historyB: Rep[DenseVector[Int]] = DenseVector[Int](N, true)
+            val crit: Rep[DenseVector[Double]] = DenseVector[Double](N, true)
+
+            if (method == "ward.D2")
+              distMatrix = distMatrix.map(a => a * a)
+
+            //calculating the index and value of nearest neighbour for each element
+            for (i <- (0 until N - 1): Rep[Range]) {
+              // var minDist = distMatrix(i, i + 1)
+              // var ind = i + 1
+              var minDist = 1000000000.0
+              var ind = -1
+              for (j <- (i + 1 until N): Rep[Range]) {
+                if (minDist > distMatrix(i, j)) {
+                  minDist = distMatrix(i, j)
+                  ind = j
+                }
+              }
+              nnIndices.update(i, ind)
+              nnDist.update(i, minDist)
+            }
+
+            println("The nearest neighbour indices: ")
+            nnIndices.pprint
+            println("The nearest neighbour distances: ")
+            nnDist.pprint
+
+            var clNum = N
+            var iMin = -1
+            var jMin = -1
+
+            //the main loop where reducing the number of clusters in each iteration
+            while (clNum > 1) {
+              var distMin = 1000000000.0
+              iMin = -1
+              jMin = -1
+              //determine least dist among clusters
+              for (ii <- (0 until N - 1): Rep[Range]) {
+                if (flags(ii) && nnDist(ii) < distMin) {
+                  // println("Here, ii=" + ii + ",jMin=" + jMin + ",iMin=" = iMin)
+                  distMin = nnDist(ii)
+                  iMin = ii
+                  jMin = nnIndices(ii)
+
+                }
+              }
+              println("The least distance is between " + iMin + " and " + jMin + " and it's value is " + distMin)
+
+              clNum = clNum - 1
+              println("The number of cluster is " + clNum)
+              historyA.update(N - clNum - 1, iMin)
+              historyB.update(N - clNum - 1, jMin)
+
+              //minimum variance method
+              if (method == "ward.D2")
+                distMin = sqrt(distMin)
+              crit.update(N - clNum - 1, distMin)
+              flags.update(jMin, false)
+
+              distMin = 1000000000.0 //distMin * distMin * distMin * distMin * distMin
+              var jj = 0
+              for (k <- (0 until N): Rep[Range]) {
+                var distIJ = distMatrix(iMin, jMin)
+                if (flags(k) && k != iMin) {
+                  //ward's D or D2 minimum variance method
+                  if (method == "ward.D" || method == "ward.D2") {
+                    val tmpSum = (membr(iMin) + membr(k)) * distMatrix(iMin, k) + (membr(jMin) + membr(k)) * distMatrix(jMin, k) - membr(k) * distIJ
+                    val tmpRes = tmpSum / (membr(iMin) + membr(jMin) + membr(k))
+                    distMatrix.update(iMin, k, tmpRes)
+                    distMatrix.update(k, iMin, tmpRes)
+                  } //single link method
+                  else if (method == "single") {
+                    var tmp = 0.0
+                    if (distMatrix(iMin, k) < distMatrix(jMin, k))
+                      tmp = distMatrix(iMin, k)
+                    else
+                      tmp = distMatrix(jMin, k)
+                    distMatrix.update(iMin, k, tmp)
+                    distMatrix.update(k, iMin, tmp)
+                  } //complete link method
+                  else if (method == "complete") {
+                    var tmp = 0.0
+                    if (distMatrix(iMin, k) > distMatrix(jMin, k))
+                      tmp = distMatrix(iMin, k)
+                    else
+                      tmp = distMatrix(jMin, k)
+                    distMatrix.update(iMin, k, tmp)
+                    distMatrix.update(k, iMin, tmp)
+                  } //average link method
+                  else if (method == "average") {
+                    val tmp = (membr(iMin) * distMatrix(iMin, k) + membr(jMin) * distMatrix(jMin, k)) / (membr(iMin) + membr(jMin))
+                    // val tmp = (distMatrix(iMin, k) + distMatrix(jMin, k))
+                    distMatrix.update(iMin, k, tmp)
+                    distMatrix.update(k, iMin, tmp)
+                  } //mcquitty method
+                  else if (method == "mcquitty") {
+                    val tmp = (distMatrix(iMin, k) + distMatrix(jMin, k)) / 2
+                    distMatrix.update(iMin, k, tmp)
+                    distMatrix.update(k, iMin, tmp)
+                  } //median method
+                  else if (method == "median") {
+                    val tmp = ((distMatrix(iMin, k) + distMatrix(jMin, k)) - distIJ) / 2
+                    distMatrix.update(iMin, k, tmp)
+                    distMatrix.update(k, iMin, tmp)
+                  } //centroid method
+                  else if (method == "centroid") {
+                    val tmp = (membr(iMin) * distMatrix(iMin, k) + membr(jMin) * distMatrix(jMin, k) -
+                      membr(iMin) * membr(jMin) * distIJ / (membr(iMin) + membr(jMin))) / (membr(iMin) + membr(jMin))
+                    distMatrix.update(iMin, k, tmp)
+                    distMatrix.update(k, iMin, tmp)
+                  }
+
+                  if (iMin < k) {
+                    if (distMatrix(iMin, k) < distMin) {
+                      distMin = distMatrix(iMin, k)
+                      jj = k
+                    }
+                  } else {
+                    if (distMatrix(iMin, k) < nnDist(k)) {
+                      nnDist.update(k, distMatrix(iMin, k))
+                      nnIndices.update(k, iMin)
+                    }
+                  }
+                }
+              }
+              val updMembr = membr(iMin) + membr(jMin)
+              membr.update(iMin, updMembr)
+              nnDist.update(iMin, distMin)
+              nnIndices.update(iMin, jj)
+
+              //update list of NNs
+              for (i <- (0 until N - 1): Rep[Range]) {
+                //  var i = 0
+
+                if (flags(i) && ((nnIndices(i) == iMin) || (nnIndices(i) == jMin))) {
+                  distMin = 1000000000.0 //distMin * distMin * distMin * distMin * distMin
+                  for (j <- (i + 1 until N): Rep[Range]) {
+                    // var j = 0
+                    if (flags(j)) {
+                      if (distMatrix(i, j) < distMin) {
+                        distMin = distMatrix(i, j)
+                        jj = j
+                      }
+                    }
+                  }
+                  nnIndices.update(i, jj)
+                  nnDist.update(i, distMin)
+                }
+              }
+            }
+
+            val merge: Rep[DenseMatrix[Int]] = DenseMatrix[Int](N - 1, 2)
+            val tmp: Rep[DenseVector[Int]] = DenseVector[Int](N, true)
+            var ind = -1
+            for (i <- (0 until N - 1): Rep[Range]) {
+              if (tmp.contains(historyA(i)))
+                merge.update(i, 0, historyA(i) + 1)
+              else {
+                merge.update(i, 0, -historyA(i) - 1)
+                ind = ind + 1
+                tmp.update(ind, historyA(i))
+              }
+              if (tmp.contains(historyB(i))) {
+                merge.update(i, 1, historyB(i) + 1)
+              } else {
+                merge.update(i, 1, -historyB(i) - 1)
+                ind = ind + 1
+                tmp.update(ind, historyB(i))
+              }
+            }
+            //     println("merge: ")
+            //     merge.pprint
+
+            val hclustObj = new Record {
+              val A = historyA
+              val B = historyB
+            }
+            hclustObj
+
+            //    println("history:")
+            //    historyA.pprint
+            //    historyB.pprint
+
+            val IIA: Rep[DenseVector[Int]] = DenseVector[Int](N, true)
+            val IIB: Rep[DenseVector[Int]] = DenseVector[Int](N, true)
+            val iOrder: Rep[DenseVector[Int]] = DenseVector[Int](N, true)
+
+            IIA = IIA.mutable
+            IIB = IIB.mutable
+            iOrder = iOrder.mutable
+
+            for (i <- (0 until N): Rep[Range]) {
+              IIA.update(i, historyA(i) + 1)
+              IIB.update(i, historyB(i) + 1)
+            }
+            //   IIA.pprint
+            //   IIB.pprint
+            for (i <- (0 until N - 2): Rep[Range]) {
+              var k = 0
+              if (historyA(i) < historyB(i))
+                k = historyA(i)
+              else
+                k = historyB(i)
+              for (j <- (i + 1 until N - 1): Rep[Range]) {
+                if (historyA(j) == k) IIA.update(j, -i - 1)
+                if (historyB(j) == k) IIB.update(j, -i - 1)
+              }
+            }
+            for (i <- (0 until N - 1): Rep[Range]) {
+              IIA.update(i, -IIA(i))
+              IIB.update(i, -IIB(i))
+            }
+            for (i <- (0 until N - 1): Rep[Range]) {
+              if (IIA(i) > 0 && IIB(i) < 0) {
+                var tmp = IIA(i)
+                IIA.update(i, IIB(i))
+                IIB.update(i, tmp)
+              }
+              if (IIA(i) > 0 && IIB(i) > 0) {
+                var t1 = 0
+                if (IIA(i) < IIB(i))
+                  t1 = IIA(i)
+                else
+                  t1 = IIB(i)
+                var t2 = 0
+                if (IIA(i) > IIB(i))
+                  t2 = IIA(i)
+                else
+                  t2 = IIB(i)
+                IIA(i) = t1
+                IIB(i) = t2
+              }
+            }
+            iOrder.update(0, IIA(N - 2))
+            iOrder.update(1, IIB(N - 2))
+            var loc = 2
+            var i = N - 3
+            //  var j = 0
+            //  var k = 0
+            while (i >= 0) {
+              for (j <- (0 until loc + 1): Rep[Range]) {
+                if (iOrder(j) == i) {
+                  iOrder.update(j, IIA(i))
+                  if (j == loc) {
+                    loc = loc + 1
+                    iOrder.update(loc, IIB(i))
+                  } else {
+                    loc = loc + 1
+                    var k = loc
+                    while (k > j + 2) {
+                      iOrder.update(k, iOrder(k - 1))
+                      k = k - 1
+                    }
+                    iOrder.update(j + 1, IIB(i))
+                  }
+                  //GOTO
+                }
+              }
+              i = i - 1
+            }
+            // for (i <- (N - 3 until 0): Rep[Range]) {
+            //   println("i je sada " + i)
+            //   for (j <- (1 until loc): Rep[Range]) {
+            //     if (iOrder(j) == i) {
+            //       iOrder.update(j, IIA(i))
+            //       if (j == loc) {
+            //         loc = loc + 1
+            //         iOrder.update(loc, IIB(i))
+            //       } else {
+            //         loc = loc + 1
+            //         for (k <- (loc until j + 2): Rep[Range]) {
+            //           iOrder.update(k, iOrder(k - 1))
+            //         }
+            //         iOrder.update(j + 1, IIB(i))
+            //       }
+            //       //GOTO
+            //     }
+            //   }
+            //   //HERE
+            // }
+            for (i <- (1 until N): Rep[Range])
+              iOrder(i) = -iOrder(i)
+            // IIA.pprint
+            // IIB.pprint
+            val mergeFinal: Rep[DenseMatrix[Int]] = DenseMatrix[Int](N - 1, 2)
+            for (i <- (0 until N - 1)) {
+              mergeFinal.update(i, 0, IIA(i))
+              mergeFinal.update(i, 1, IIB(i))
+            }
+            println("Merge: ")
+            mergeFinal.pprint
+          //  println("The order is:")
+          //  iOrder.pprint
+
+          case "as.dist" =>
+            val args = e.getArgs
+            val m: Rep[DenseMatrix[Double]] = eval(args.getNode(0), frame).as[DenseMatrix[Double]]
+            m
+          case "plot" =>
+            val args = e.getArgs
+            val merge: Rep[DenseMatrix[Int]] = eval(args.getNode(0), frame).as[DenseMatrix[Int]]
+
+            val immge: Rep[DenseMatrix[Int]] = DenseMatrix[Int](500, 1000)
+
+            val rows: Rep[Int] = unit(500).as[Int]
+            val cols: Rep[Int] = unit(1000).as[Int]
+
+            val step: Rep[Int] = (cols - 200) / merge.numRows
+            println("The step is " + step)
+            println("cols=" + cols + ", merge.numCols=" + merge.numRows)
+
+            // val immage1: Rep[DenseVector[DenseVector[Int]]] = DenseVector[DenseVector[Int]](1000, true)
+            // for (i <- (0 until rows): Rep[Range]) {
+            //   val vect = DenseVector[Int](500, true)
+            //   immage1.update(i, vect)
+            // }
+
+            //horizontal line for plot
+            val immage = (immge.map(a => 255)).mutable
+            println(immage.numRows + " " + immage.numCols)
+            for (i <- (100 until 900): Rep[Range]) {
+              immage.update(400, i, 0)
+            }
+            //vertical line for plot
+            for (i <- (100 until 400): Rep[Range]) {
+              immage.update(i, 100, 0)
+            }
+            for (j <- (0 until merge.numRows): Rep[Range]) {
+              for (i <- (410 until 420): Rep[Range]) {
+                immage.update(i, 100 + step * (j + 1), 0)
+              }
+            }
+            // immage.update(411, 118, 0)
+            // immage.update(410, 118, 0)
+            // immage.update(410, 117, 0)
+            //numbers
+            //   for(i<-(0 until merge.numRows):Rep[Range]){
+
+            //   }
+
+            //   val write: Rep[DenseVector[String]] = DenseVector[String](1003, true)
+            val write1: Rep[DenseVector[DenseVector[String]]] = DenseVector[DenseVector[String]](503, true)
+            write1 = write1.mutable
+
+            val sign = "P2"
+            //   write.update(0, sign)
+
+            val r1 = DenseVector[String](1, true)
+            r1 = r1.mutable
+            r1.update(0, sign)
+            write1.update(0, r1)
+
+            //    val dims = "1000 500"
+            //     write.update(1, dims)
+
+            val r2 = DenseVector[String](2, true)
+            r2 = r2.mutable
+            r2.update(0, "1000")
+            r2.update(1, "500")
+            write1.update(1, r2)
+
+            //     val gray = "15"
+            //    write.update(2, gray)
+
+            val r3 = DenseVector[String](1, true)
+            r3 = r3.mutable
+            r3.update(0, "15")
+            write1.update(2, r3)
+
+            for (i <- (0 until rows): Rep[Range]) {
+              // var s = ""
+              val r = DenseVector[String](1000, true)
+              r = r.mutable
+              for (j <- (0 until cols): Rep[Range]) {
+                //   s = s + immage(i, j) + " "
+                r.update(j, "" + immage(i, j) + "")
+                //     println("EVO OVO " + "" + immage(i, j) + "")
+              }
+              //   val str: Rep[String] = s
+              //  write.update(i + 3, str)
+              write1.update(i + 3, r)
+            }
+
+            // writeVector(write, "/home/lidija/Science/Relite/test-src/myImmage.pgm")
+            // writeMatrix(immage, "/home/lidija/Science/Relite/test-src/myImmage1.pgm")
+            writeVector(write1, "/home/lidija/Science/Relite/test-src/myImmage2.pgm")
+
           //calls of defined functions
           //not working for arguments with default values yet
           case _ =>
@@ -1086,7 +1540,8 @@ class EvalRunner extends MainDeliteRunner with Eval { self =>
 object DeliteBridge {
 
   def install(): Unit = {
-    installDelite()
+    // 
+    installDeliteWaitForIt()
     installTime()
   }
 
@@ -1118,6 +1573,35 @@ object DeliteBridge {
 
     Primitives.add(cf)
   }
+
+  def installDeliteWaitForIt(): Unit = {
+    val cf = new CallFactory("Delite", Array("e"), Array("e")) {
+      def create(call: ASTNode, names: Array[RSymbol], exprs: Array[RNode]): RNode = {
+        check(call, names, exprs)
+        val expr = exprs(0)
+        val ast = expr.getAST()
+        println("Here is the ast: " + ast)
+        val ast1: AnyRef = ast // apparently ASTNode member fields are reassigned -- don't make it look like one!
+        new BaseR(call) {
+          def execute(frame: Frame): AnyRef = {
+            val ast = ast1.asInstanceOf[ASTNode]
+            println("delite input: " + ast)
+
+            val runner = new EvalRunner {}
+            runner.program = { x =>
+              val res = runner.eval(ast, null)
+              runner.setResult(res)
+            }
+            DeliteRunner.compileAndTest(runner)
+            runner.getResult
+          }
+        }
+      }
+    }
+
+    Primitives.add(cf)
+  }
+
   def installTime(): Unit = {
     val cf = new CallFactory("system.time", Array("e"), Array("e")) {
       def create(call: ASTNode, names: Array[RSymbol], exprs: Array[RNode]): RNode = {
