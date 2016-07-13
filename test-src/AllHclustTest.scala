@@ -51,8 +51,9 @@ object AllHclustTest {
       Delite({
   
 
-        x<-read.table("/home/lidija/Science/Relite/test-src/DistMatr/ERPtestabschnittpathSimilaritie.csv", header=FALSE, ",", row.names=1)
+        x<-read.table("/opt/hclust/Relite/test-src/DistMatr/ERPtestabschnittpathSimilaritie.csv", header=FALSE, ",", row.names=1)
         hc<-hclust(as.dist(x), "average")
+        
 
 
       })

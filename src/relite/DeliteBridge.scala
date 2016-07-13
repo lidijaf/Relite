@@ -55,8 +55,6 @@ import optiml.shared._
 
 trait Eval extends OptiMLApplicationCompiler with StaticData with FunctionsRecursiveExp {
 
-  type hclust = Record { val A: DenseVector[Int]; val b: DenseVector[Int] }
-
   type Env = mutable.Map[RSymbol, Rep[Any]]
   var env: Env = mutable.Map.empty
 
@@ -843,8 +841,6 @@ trait Eval extends OptiMLApplicationCompiler with StaticData with FunctionsRecur
 
             //calculating the index and value of nearest neighbour for each element
             for (i <- (0 until N - 1): Rep[Range]) {
-              // var minDist = distMatrix(i, i + 1)
-              // var ind = i + 1
               var minDist = 1000000000.0
               var ind = -1
               for (j <- (i + 1 until N): Rep[Range]) {
@@ -857,11 +853,6 @@ trait Eval extends OptiMLApplicationCompiler with StaticData with FunctionsRecur
               nnDist.update(i, minDist)
             }
 
-            println("The nearest neighbour indices: ")
-            nnIndices.pprint
-            println("The nearest neighbour distances: ")
-            nnDist.pprint
-
             var clNum = N
             var iMin = -1
             var jMin = -1
@@ -871,30 +862,25 @@ trait Eval extends OptiMLApplicationCompiler with StaticData with FunctionsRecur
               var distMin = 1000000000.0
               iMin = -1
               jMin = -1
-              //determine least dist among clusters
               for (ii <- (0 until N - 1): Rep[Range]) {
                 if (flags(ii) && nnDist(ii) < distMin) {
-                  // println("Here, ii=" + ii + ",jMin=" + jMin + ",iMin=" = iMin)
                   distMin = nnDist(ii)
                   iMin = ii
                   jMin = nnIndices(ii)
 
                 }
               }
-              println("The least distance is between " + iMin + " and " + jMin + " and it's value is " + distMin)
 
               clNum = clNum - 1
-              println("The number of cluster is " + clNum)
               historyA.update(N - clNum - 1, iMin)
               historyB.update(N - clNum - 1, jMin)
 
-              //minimum variance method
               if (method == "ward.D2")
                 distMin = sqrt(distMin)
               crit.update(N - clNum - 1, distMin)
               flags.update(jMin, false)
 
-              distMin = 1000000000.0 //distMin * distMin * distMin * distMin * distMin
+              distMin = 1000000000.0
               var jj = 0
               for (k <- (0 until N): Rep[Range]) {
                 var distIJ = distMatrix(iMin, jMin)
@@ -965,14 +951,10 @@ trait Eval extends OptiMLApplicationCompiler with StaticData with FunctionsRecur
               nnDist.update(iMin, distMin)
               nnIndices.update(iMin, jj)
 
-              //update list of NNs
               for (i <- (0 until N - 1): Rep[Range]) {
-                //  var i = 0
-
                 if (flags(i) && ((nnIndices(i) == iMin) || (nnIndices(i) == jMin))) {
-                  distMin = 1000000000.0 //distMin * distMin * distMin * distMin * distMin
+                  distMin = 1000000000.0
                   for (j <- (i + 1 until N): Rep[Range]) {
-                    // var j = 0
                     if (flags(j)) {
                       if (distMatrix(i, j) < distMin) {
                         distMin = distMatrix(i, j)
@@ -986,38 +968,6 @@ trait Eval extends OptiMLApplicationCompiler with StaticData with FunctionsRecur
               }
             }
 
-            val merge: Rep[DenseMatrix[Int]] = DenseMatrix[Int](N - 1, 2)
-            val tmp: Rep[DenseVector[Int]] = DenseVector[Int](N, true)
-            var ind = -1
-            for (i <- (0 until N - 1): Rep[Range]) {
-              if (tmp.contains(historyA(i)))
-                merge.update(i, 0, historyA(i) + 1)
-              else {
-                merge.update(i, 0, -historyA(i) - 1)
-                ind = ind + 1
-                tmp.update(ind, historyA(i))
-              }
-              if (tmp.contains(historyB(i))) {
-                merge.update(i, 1, historyB(i) + 1)
-              } else {
-                merge.update(i, 1, -historyB(i) - 1)
-                ind = ind + 1
-                tmp.update(ind, historyB(i))
-              }
-            }
-            //     println("merge: ")
-            //     merge.pprint
-
-            val hclustObj = new Record {
-              val A = historyA
-              val B = historyB
-            }
-            hclustObj
-
-            //    println("history:")
-            //    historyA.pprint
-            //    historyB.pprint
-
             val IIA: Rep[DenseVector[Int]] = DenseVector[Int](N, true)
             val IIB: Rep[DenseVector[Int]] = DenseVector[Int](N, true)
             val iOrder: Rep[DenseVector[Int]] = DenseVector[Int](N, true)
@@ -1030,8 +980,6 @@ trait Eval extends OptiMLApplicationCompiler with StaticData with FunctionsRecur
               IIA.update(i, historyA(i) + 1)
               IIB.update(i, historyB(i) + 1)
             }
-            //   IIA.pprint
-            //   IIB.pprint
             for (i <- (0 until N - 2): Rep[Range]) {
               var k = 0
               if (historyA(i) < historyB(i))
@@ -1068,15 +1016,17 @@ trait Eval extends OptiMLApplicationCompiler with StaticData with FunctionsRecur
                 IIB(i) = t2
               }
             }
+
             iOrder.update(0, IIA(N - 2))
             iOrder.update(1, IIB(N - 2))
-            var loc = 2
+            var loc = 1
             var i = N - 3
-            //  var j = 0
-            //  var k = 0
+            var k = 0
             while (i >= 0) {
-              for (j <- (0 until loc + 1): Rep[Range]) {
-                if (iOrder(j) == i) {
+              var out = false;
+              var j = 0
+              while (j <= loc) {
+                if (iOrder(j) == i + 1) {
                   iOrder.update(j, IIA(i))
                   if (j == loc) {
                     loc = loc + 1
@@ -1084,58 +1034,80 @@ trait Eval extends OptiMLApplicationCompiler with StaticData with FunctionsRecur
                   } else {
                     loc = loc + 1
                     var k = loc
-                    while (k > j + 2) {
+                    while (k >= j + 2) {
                       iOrder.update(k, iOrder(k - 1))
                       k = k - 1
                     }
                     iOrder.update(j + 1, IIB(i))
                   }
-                  //GOTO
+                  out = true
                 }
+                j = j + 1
               }
               i = i - 1
             }
-            // for (i <- (N - 3 until 0): Rep[Range]) {
-            //   println("i je sada " + i)
-            //   for (j <- (1 until loc): Rep[Range]) {
-            //     if (iOrder(j) == i) {
-            //       iOrder.update(j, IIA(i))
-            //       if (j == loc) {
-            //         loc = loc + 1
-            //         iOrder.update(loc, IIB(i))
-            //       } else {
-            //         loc = loc + 1
-            //         for (k <- (loc until j + 2): Rep[Range]) {
-            //           iOrder.update(k, iOrder(k - 1))
-            //         }
-            //         iOrder.update(j + 1, IIB(i))
-            //       }
-            //       //GOTO
-            //     }
-            //   }
-            //   //HERE
-            // }
-            for (i <- (1 until N): Rep[Range])
+
+            for (i <- (0 until N): Rep[Range])
               iOrder(i) = -iOrder(i)
-            // IIA.pprint
-            // IIB.pprint
-            val mergeFinal: Rep[DenseMatrix[Int]] = DenseMatrix[Int](N - 1, 2)
+
+            val merge: Rep[DenseMatrix[Int]] = DenseMatrix[Int](N - 1, 2)
             for (i <- (0 until N - 1)) {
-              mergeFinal.update(i, 0, IIA(i))
-              mergeFinal.update(i, 1, IIB(i))
+              merge.update(i, 0, IIA(i))
+              merge.update(i, 1, IIB(i))
             }
-            println("Merge: ")
-            mergeFinal.pprint
-          //  println("The order is:")
-          //  iOrder.pprint
+
+            val height = crit.mutable
+            height.remove(N - 1)
+
+            val hclustObj = new Record {
+              val merge: Rep[DenseMatrix[Int]] = merge
+              val height: Rep[DenseVector[Double]] = height
+              val order: Rep[DenseVector[Int]] = iOrder
+            }
+
+            val printVector: Rep[DenseVector[String]] = DenseVector[String](11, true)
+
+            printVector.update(0, "hc<-list()")
+            printVector.update(1, "hc$merge<-matrix(c(")
+            printVector.update(2, "")
+            printVector.update(3, "")
+            IIA.remove(N - 1)
+            IIB.remove(N - 1)
+            val lastEl = IIB(N - 2)
+            IIB.remove(N - 2)
+
+            IIA.foreach(i => printVector.update(2, printVector(2) + i + ", "))
+            IIB.foreach(i => printVector.update(3, printVector(3) + i + ", "))
+            printVector.update(3, printVector(3) + lastEl)
+            printVector.update(4, "), " + (N - 1) + ", 2)")
+
+            printVector.update(5, "hc$height<-c(")
+            printVector.update(6, "")
+            val lastEl2 = height(N - 2)
+            height.remove(N - 2)
+            height.foreach((ii: Rep[Double]) => printVector.update(6, printVector(6) + ii + ", "))
+            printVector.update(6, printVector(6) + lastEl2 + ")")
+
+            printVector.update(7, "hc$order<-c(")
+            printVector.update(8, "")
+            val lastEl3 = iOrder(N - 1)
+            iOrder.remove(N - 1)
+            iOrder.foreach(i => printVector.update(8, printVector(8) + i + ", "))
+            printVector.update(8, printVector(8) + lastEl3 + ")")
+            printVector.update(9, "class(hc)<-\"hclust\"")
+            printVector.update(10, "plot(hc)")
+
+            writeVector(printVector, "hclust-res.r")
+
+            hclustObj
 
           case "as.dist" =>
             val args = e.getArgs
             val m: Rep[DenseMatrix[Double]] = eval(args.getNode(0), frame).as[DenseMatrix[Double]]
             m
           case "plot" =>
-            val args = e.getArgs
-            val merge: Rep[DenseMatrix[Int]] = eval(args.getNode(0), frame).as[DenseMatrix[Int]]
+            val args = e.getArgs.getNode(0)
+            val merge: Rep[DenseMatrix[Int]] = eval(args, frame).as[DenseMatrix[Int]]
 
             val immge: Rep[DenseMatrix[Int]] = DenseMatrix[Int](500, 1000)
 
